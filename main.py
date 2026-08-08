@@ -1,66 +1,121 @@
-import joblib
-import pandas as pd
-from fastapi import FastAPI
-from pydantic import BaseModel, Field
-from typing import Literal
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+import pandas as pd
+import joblib
+import os
 
-
-model = joblib.load('Mental_Health_Model.pkl')
-
-app = FastAPI()
+app = FastAPI(title="NYC House Classification API")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-#pydantic
-class StudentData(BaseModel):
-        age                     : int = Field(..., ge=10, le=100)
-        gender                  : Literal['Male', 'Female']
-        country                 : str
-        academic_level          : Literal['Undergraduate', 'Graduate', 'High School']
-        most_used_platform      : Literal['Facebook', 'LinkedIn', 'Instagram', 'Snapchat','Twitter','YouTube', 'TikTok', 'LINE', 'KakaoTalk', 'VKontakte', 'WhatsApp','WeChat']
-        purpose_of_use          : Literal['Networking', 'Education', 'Entertainment', 'News']
-        avg_daily_usage_hours   : float = Field(..., ge=0, le=24)
-        daily_unlocks           : int   = Field(..., ge=0)
-        study_hours             : float = Field(..., ge=0, le=24)
-        physical_activity_hours : float = Field(..., ge=0, le=24)
-        sleep_hours_per_night   : float = Field(..., ge=0, le=24)
-        stress_level            : Literal['Medium', 'Low', 'Very High', 'High']
+COLUMNS = [
+    "latitude",
+    "longitude",
+    "price",
+    "minimum_nights",
+    "number_of_reviews",
+    "reviews_per_month",
+    "calculated_host_listings_count",
+    "availability_365",
+    "neighbourhood_group",
+    "neighbourhood",
+]
+
+# -------------------------
+# Load Model
+# -------------------------
+
+MODEL_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "Model_Pipeline.pkl"
+)
+
+model = joblib.load(MODEL_PATH)
 
 
+# -------------------------
+# Pydantic Input Model
+# -------------------------
 
-# Describe what we send back
-class PredictionResponse(BaseModel):
-     predicted_mental_health_score:float
+class Features(BaseModel):
+    latitude: float = Field(..., ge=-90, le=90)
+    longitude: float = Field(..., ge=-180, le=180)
+    price: float = Field(..., ge=0)
+    minimum_nights: int = Field(..., ge=0)
+    number_of_reviews: int = Field(..., ge=0)
+    reviews_per_month: float = Field(..., ge=0)
+    calculated_host_listings_count: int = Field(..., ge=0)
+    availability_365: int = Field(..., ge=0, le=365)
+    neighbourhood_group: str
+    neighbourhood: str
 
-@app.get('/')
-def greet():
-    return{"Welcome to Shreyan Ai"}
-top_countries =['Other','India','USA','Canada','Australia','UK','Germany','Mexico','Turkey','France']
 
-@app.post('/predict', response_model=PredictionResponse)
-def predict(data: StudentData):
-    country_group = data.country if data.country in top_countries else "Other"
-    input_row = pd.DataFrame([{
-         'Age'                       :data.age,
-        'Gender'                    :data.gender,
-        'Country'                   :data.country,
-        'Academic_Level'            :data.academic_level,
-        'Most_Used_Platform'        :data.most_used_platform,
-        'Purpose_Of_Use'            :data.purpose_of_use,
-        'Avg_Daily_Usage_Hours'     :data.avg_daily_usage_hours,
-        'Daily_Unlocks'             :data.daily_unlocks,
-        'Study_Hours'               :data.study_hours,
-        'Physical_Activity_Hours'   :data.physical_activity_hours,
-        'Sleep_Hours_Per_Night'     :data.sleep_hours_per_night,
-        'Stress_Level'              :data.stress_level,
-        'Gouped_Country'           :country_group
-    }])
+# -------------------------
+# Frontend
+# -------------------------
 
-    prediction = model.predict(input_row)[0]
-    return PredictionResponse(predicted_mental_health_score=round(float(prediction)))
+@app.get("/")
+def home():
+    return FileResponse(
+        os.path.join(os.path.dirname(__file__), "index.html")
+    )
+
+
+# -------------------------
+# API Health Check
+# -------------------------
+
+@app.get("/api")
+def api_home():
+    return {
+        "message": "NYC House Classification API is Running Successfully 🚀"
+    }
+
+
+# -------------------------
+# Prediction API
+# -------------------------
+
+@app.post("/predict")
+def predict(features: Features):
+
+    try:
+        row = pd.DataFrame(
+            [features.model_dump()],
+            columns=COLUMNS
+        )
+
+        prediction = model.predict(row)[0]
+
+        probability = model.predict_proba(row)[0].tolist()
+
+        return {
+            "Predicted_room_type": prediction,
+            "Probability": probability
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+
+# -------------------------
+# Static Files
+# -------------------------
+
+app.mount(
+    "/static",
+    StaticFiles(directory=os.path.dirname(__file__)),
+    name="static"
+)
